@@ -140,15 +140,11 @@ class Invalid(Error):
 
     :attr msg: The error message.
     :attr path: The path to the error, as a list of keys in the source data.
-    :attr error_message: The actual error message that was raised, as a
-        string.
-
     """
 
-    def __init__(self, message, path=None, error_message=None):
+    def __init__(self, message, path=None):
         Error.__init__(self,  message)
         self.path = path or []
-        self.error_message = error_message or message
 
     @property
     def msg(self):
@@ -174,10 +170,6 @@ class MultipleInvalid(Invalid):
     @property
     def path(self):
         return self.errors[0].path
-
-    @property
-    def error_message(self):
-        return self.errors[0].error_message
 
     def add(self, error):
         self.errors.append(error)
@@ -219,6 +211,43 @@ class Schema(object):
             raise MultipleInvalid([e])
         # return self.validate([], self.schema, data)
 
+    def __add__(self, other):
+        """Combine two schemas
+
+        Works with dict based schemas
+        >>> validate_a = Schema({'one': 'two', 'three': 'four'})
+        >>> validate_b = Schema({'five': 'six', 'seven': 'eight'})
+        >>> (validate_a + validate_b).schema
+        {'seven': 'eight', 'five': 'six', 'three': 'four', 'one': 'two'}
+
+        As well as with lists
+        >>> validate_a = Schema(['one', 'two'])
+        >>> validate_b = Schema(['three', 'four'])
+        >>> (validate_a + validate_b).schema
+        ('one', 'two', 'three', 'four')
+
+         As well as with and tuples
+        >>> validate_a = Schema(('one', 'two'))
+        >>> validate_b = Schema(('three', 'four'))
+        >>> (validate_a + validate_b).schema
+        ('one', 'two', 'three', 'four')
+
+        """
+        assert isinstance(other.schema, type(self.schema)), \
+            "Other schema should be same type"
+        if isinstance(self.schema, dict):
+            is_nested = lambda s: isinstance(s, (dict, tuple, list, set))
+            assert not filter(is_nested, self.schema.values()), \
+                "Left schema should not have nested elements"
+            assert not filter(is_nested, other.schema.values()), \
+                "Right schema should not have nested elements"
+            new_schema = dict(other.schema, **self.schema)
+        elif isinstance(self.schema, (tuple, list)):
+            new_schema = tuple(self.schema) + tuple(other.schema)
+        else:
+            raise NotImplementedError
+        return Schema(schema=new_schema, required=self.required, extra=self.extra)
+        
     def _compile(self, schema):
         if schema is Extra:
             return lambda _, v: v
@@ -285,9 +314,7 @@ class Schema(object):
                                 errors.append(err)
                             else:
                                 errors.append(
-                                    Invalid(err.msg + invalid_msg,
-                                            err.path,
-                                            err.msg))
+                                    Invalid(err.msg + invalid_msg, err.path))
                         break
 
                     # Key and value okay, mark any Required() fields as found.
@@ -532,8 +559,7 @@ def _compile_scalar(schema):
             if isinstance(data, schema):
                 return data
             else:
-                msg = 'expected %s' % schema.__name__
-                raise Invalid(msg, path)
+                raise Invalid('expected %s' % schema.__name__, path)
         return validate_instance
 
     if callable(schema):
@@ -543,7 +569,7 @@ def _compile_scalar(schema):
             except ValueError as e:
                 raise Invalid('not a valid value', path)
             except Invalid as e:
-                raise Invalid(e.msg, path + e.path, e.error_message)
+                raise Invalid(e.msg, path + e.path)
         return validate_callable
 
     def validate_value(path, data):
